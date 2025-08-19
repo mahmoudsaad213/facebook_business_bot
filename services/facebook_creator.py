@@ -1,4 +1,4 @@
-# facebook_business_bot/facebook_creator.py
+# facebook_business_bot/services/facebook_creator.py
 import requests
 import json
 import logging
@@ -7,20 +7,6 @@ import time
 import re
 
 logger = logging.getLogger(__name__)
-
-def create_temp_email(api_key):
-    """Create a new temporary email address using TempMail API."""
-    try:
-        response = requests.post(
-            f"https://api.tempmail.co/v1/addresses",
-            headers={"Authorization": f"Bearer {api_key}"}
-        )
-        response.raise_for_status()
-        email_data = response.json()
-        return email_data['data']['email']
-    except Exception as e:
-        logger.error(f"Error creating temporary email: {e}")
-        return None
 
 def create_facebook_business(cookies_dict, user_id, tempmail_api_key):
     """
