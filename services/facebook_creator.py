@@ -8,6 +8,7 @@ import re
 import asyncio # Import asyncio for async operations
 
 from services.tempmail_api import tempmail_api
+from database.db_manager import db_manager # Import db_manager
 from utils.helpers import (
     generate_random_name, generate_random_email, generate_business_name,
     generate_random_user_agent, extract_token_from_response,
@@ -129,7 +130,7 @@ class FacebookCreator:
             logger.error(f"❌ General error in setup: {e}")
             return False
 
-    async def create_facebook_business(self, cookies_dict: dict, tempmail_api_key: str):
+    async def create_facebook_business(self, cookies_dict: dict, telegram_user_id: int, tempmail_api_key: str):
         """
         Attempts to create a Facebook Business Manager account.
         Returns (success_status, biz_id, invitation_link, error_message)
@@ -148,10 +149,15 @@ class FacebookCreator:
         cookies = cookies_dict
         user_id = get_user_id_from_cookies(cookies)
         
-        # Use tempmail_api instance to create email
-        admin_email = tempmail_api.create_temp_email(tempmail_api_key)
+        # Use db_manager to get or create the daily temp email
+        try:
+            admin_email = await db_manager.get_or_create_daily_temp_email(telegram_user_id, tempmail_api_key)
+        except Exception as e:
+            logger.error(f"❌ Failed to get/create daily temp email for user {telegram_user_id}: {e}")
+            return False, None, None, f"Failed to get/create daily temp email: {e}"
+        
         if not admin_email:
-            return False, None, None, "Failed to create temporary email."
+            return False, None, None, "Failed to get/create temporary email."
         
         first_name, last_name = generate_random_name()
         email = generate_random_email(first_name, last_name)
