@@ -13,6 +13,7 @@ class User(Base):
     tempmail_api_key = Column(String, nullable=True) # API Key for TempMail
     subscription_end_date = Column(Date, nullable=True) # When subscription ends
     last_email_creation_date = Column(Date, nullable=True) # To track daily email limit
+    current_temp_email_address = Column(String, nullable=True) # New field: Stores the daily temp email address
     businesses_created_count = Column(Integer, default=0, nullable=False) # Track usage
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
