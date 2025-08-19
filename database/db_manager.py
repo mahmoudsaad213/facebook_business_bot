@@ -7,7 +7,7 @@ import logging
 
 from config import DATABASE_URL
 from database.models import Base, User
-
+db_manager = DBManager()
 logger = logging.getLogger(__name__)
 
 class DBManager:
