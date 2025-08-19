@@ -7,7 +7,7 @@ load_dotenv()
 
 # --- Telegram Bot Configuration ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0")) # Default to 0 if not set, ensure it's an integer
+ADMIN_ID = int(os.getenv("ADMIN_ID", "5895491379")) # Default to 0 if not set, ensure it's an integer
 
 # --- TempMail API Configuration ---
 TEMPMAIL_BASE_URL = "https://api.tempmail.co/v1"
