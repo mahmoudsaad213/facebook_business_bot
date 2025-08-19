@@ -106,95 +106,117 @@ async def create_business_loop(update: Update, context: ContextTypes.DEFAULT_TYP
     """Continuously creates businesses until limit is reached or a persistent error occurs."""
     user_id = update.effective_user.id
     
+    user = db_manager.get_user(user_id)
+    if not user or not db_manager.is_user_subscribed(user):
+        await update.message.reply_text(
+            "❌ اشتراكك غير نشط. توقف إنشاء الحسابات."
+        )
+        logger.warning(f"User {user_id} subscription became inactive during creation loop.")
+        return
+
     if user_id not in user_cookies_storage or not user_cookies_storage[user_id]:
         await update.message.reply_text(
-            "❌ Your cookies are not saved. Please send them first as a text message."
+            "❌ الكوكيز الخاصة بك غير محفوظة. يرجى إرسالها أولاً كرسالة نصية."
         )
         return
 
-    # استرجاع المستخدم من قاعدة البيانات
-    user = db_manager.get_user(user_id)
-    if not user or not user.tempmail_api_key:
-        await update.message.reply_text("❌ TempMail API Key is not set for your account.")
+    if not user.tempmail_api_key:
+        await update.message.reply_text(
+            "❌ لم يتم تعيين مفتاح TempMail API الخاص بك. يرجى الاتصال بالمسؤول."
+        )
+        logger.warning(f"User {user_id} has no TempMail API key set, stopping creation loop.")
         return
 
-    # تحقق من صحة الكوكيز
-    cookies = user_cookies_storage[user_id]
-    if 'c_user' not in cookies or 'xs' not in cookies:
-        await update.message.reply_text("❌ Invalid cookies. Please ensure they contain `c_user` and `xs`.")
-        return
-
-    business_count = 0
+    business_count = user.businesses_created_count # Start from current count
     while True:
-        business_count += 1
-        await update.message.reply_text(f"🚀 Attempting to create Business #{business_count}...")
-        logger.info(f"User  {user_id}: Starting creation for Business #{business_count}")
-
-        max_retries_per_business = 3
-        initial_delay = 5 # seconds
-        
-        current_biz_attempt_success = False
-        for attempt in range(1, max_retries_per_business + 1):
+        # Check subscription status before each attempt
+        user = db_manager.get_user(user_id)
+        if not user or not db_manager.is_user_subscribed(user):
             await update.message.reply_text(
-                f"⏳ Business #{business_count}: Creation attempt {attempt}/{max_retries_per_business}..."
+                "❌ اشتراكك غير نشط. توقف إنشاء الحسابات."
             )
-            logger.info(f"User  {user_id}: Business #{business_count}, creation attempt {attempt}")
+            logger.warning(f"User {user_id} subscription became inactive during creation loop.")
+            break
 
-            success, biz_id, invitation_link, error_message = await facebook_creator.create_facebook_business(
-                cookies,
-                user_id,  # أو telegram_user_id
-                user.tempmail_api_key  # تمرير مفتاح API الخاص بـ TempMail
+        business_count += 1
+        await update.message.reply_text(f"🚀 جاري محاولة إنشاء الحساب رقم {business_count}...")
+        logger.info(f"User {user_id}: Starting creation for Business #{business_count}")
+
+        current_biz_attempt_success = False
+        for attempt in range(1, MAX_RETRIES_PER_BUSINESS + 1):
+            await update.message.reply_text(
+                f"⏳ الحساب رقم {business_count}: محاولة الإنشاء {attempt}/{MAX_RETRIES_PER_BUSINESS}..."
             )
+            logger.info(f"User {user_id}: Business #{business_count}, creation attempt {attempt}")
+
+            # Pass the user's specific tempmail_api_key
+            success, biz_id, invitation_link, error_message = await facebook_creator.create_facebook_business(
+                user_cookies_storage[user_id], user_id, user.tempmail_api_key
+            )
+
+            # التحقق من الأخطاء الحرجة التي يجب إيقاف العملية عندها
+            if error_message and any(keyword in error_message.lower() for keyword in [
+                "restricted", "account is currently restricted", "1357053", 
+                "token not found", "cookies validity"
+            ]):
+                await update.message.reply_text(
+                    f"❌ خطأ حرج: {error_message}\n"
+                    "تم إيقاف عملية إنشاء الحسابات. يرجى مراجعة الكوكيز أو الحساب المستخدم."
+                )
+                logger.error(f"User {user_id}: Critical error encountered. Stopping creation loop. Error: {error_message}")
+                return  # إيقاف العملية بالكامل
 
             if success == "LIMIT_REACHED":
                 await update.message.reply_text(
-                    "🛑 Facebook business creation limit reached for these cookies! Stopping further attempts."
+                    "🛑 تم الوصول إلى حد إنشاء حسابات فيسبوك للأعمال لهذه الكوكيز! جاري إيقاف المحاولات الإضافية."
                 )
-                logger.info(f"User  {user_id}: Business creation limit reached. Total created: {business_count - 1}")
-                return # Exit the loop and function
+                logger.info(f"User {user_id}: Business creation limit reached. Total created: {business_count - 1}")
+                return 
+            
             elif success:
-                escaped_success_text = "🎉 Business created successfully\\!" 
-                escaped_biz_id_label = "📊 \\*Business ID:\\*" 
-                escaped_invitation_link_label = "🔗 \\*Invitation Link:\\*" 
-
                 message = (
-                    f"{escaped_success_text}\n"
-                    f"{escaped_biz_id_label} `{escape_markdown(biz_id, version=2)}`\n"
-                    f"{escaped_invitation_link_label} {escape_markdown(invitation_link, version=2)}"
+                    f"🎉 تم إنشاء الحساب بنجاح!\n"
+                    f"📊 معرف الحساب: {biz_id}\n"
+                    f"🔗 رابط الدعوة: {invitation_link}"
                 )
-                await update.message.reply_text(message, parse_mode='MarkdownV2')
-                logger.info(f"User  {user_id}: Business #{business_count} created successfully on attempt {attempt}.")
+                await update.message.reply_text(message)
+                logger.info(f"User {user_id}: Business #{business_count} created successfully on attempt {attempt}.")
+                
+                # Update user's created count in DB
+                user.businesses_created_count = business_count
+                db_manager.update_user(user)
+                
                 current_biz_attempt_success = True
                 break # Break from inner retry loop, move to next business
             else:
-                logger.error(f"User  {user_id}: Business #{business_count} creation failed on attempt {attempt}. Reason: {error_message}")
+                logger.error(f"User {user_id}: Business #{business_count} creation failed on attempt {attempt}. Reason: {error_message}")
                 
-                if attempt < max_retries_per_business:
-                    delay = initial_delay * (2 ** (attempt - 1)) # Exponential backoff
+                if attempt < MAX_RETRIES_PER_BUSINESS:
+                    delay = INITIAL_RETRY_DELAY * (2 ** (attempt - 1)) # Exponential backoff
                     await update.message.reply_text(
-                        f"❌ Business #{business_count}: Creation failed on attempt {attempt}. Reason: {escape_markdown(error_message, version=2)}\n"
-                        f"Retrying in {delay} seconds..."
+                        f"❌ الحساب رقم {business_count}: فشلت محاولة الإنشاء {attempt}. السبب: {error_message}\n"
+                        f"جاري إعادة المحاولة بعد {delay} ثواني..."
                     )
-                    await asyncio.sleep(delay)  # Use asyncio.sleep for non-blocking delay
+                    await asyncio.sleep(delay)
                 else:
                     final_error_message = (
-                        f"❌ Business #{business_count}: All {max_retries_per_business} attempts failed.\n"
-                        f"Last error: {escape_markdown(error_message, version=2)}"
+                        f"❌ الحساب رقم {business_count}: فشلت جميع المحاولات الـ {MAX_RETRIES_PER_BUSINESS}.\n"
+                        f"آخر خطأ: {error_message}"
                     )
                     if biz_id:
-                        final_error_message += f"\n📊 *Partial Business ID:* `{escape_markdown(biz_id, version=2)}`"
-                    await update.message.reply_text(final_error_message, parse_mode='MarkdownV2')
-                    logger.error(f"User  {user_id}: Business #{business_count}: All attempts failed. Final error: {error_message}")
+                        final_error_message += f"\n📊 معرف الحساب الجزئي: {biz_id}"
+                    await update.message.reply_text(final_error_message)
+                    logger.error(f"User {user_id}: Business #{business_count}: All attempts failed. Final error: {error_message}")
         
         if not current_biz_attempt_success:
             await update.message.reply_text(
-                f"⚠️ Business #{business_count} could not be created after multiple retries. Moving to next business attempt."
+                f"⚠️ لم يتمكن من إنشاء الحساب رقم {business_count} بعد عدة محاولات. جاري الانتقال إلى محاولة إنشاء حساب آخر."
             )
             # Add a small delay before trying the next business if the current one failed persistently
             await asyncio.sleep(random.randint(10, 20))
         else:
             # If successful, wait a bit before trying the next one
-            await update.message.reply_text(f"✅ Business #{business_count} created. Waiting a bit before next attempt...")
+            await update.message.reply_text(f"✅ تم إنشاء الحساب رقم {business_count}. جاري الانتظار قليلاً قبل المحاولة التالية...")
             await asyncio.sleep(random.randint(5, 15)) # Random delay between successful creations
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
