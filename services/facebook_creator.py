@@ -8,6 +8,20 @@ import re
 
 logger = logging.getLogger(__name__)
 
+def create_temp_email(api_key):
+    """Create a new temporary email address using TempMail API."""
+    try:
+        response = requests.post(
+            f"https://api.tempmail.co/v1/addresses",
+            headers={"Authorization": f"Bearer {api_key}"}
+        )
+        response.raise_for_status()
+        email_data = response.json()
+        return email_data['data']['email']
+    except Exception as e:
+        logger.error(f"Error creating temporary email: {e}")
+        return None
+
 def create_facebook_business(cookies_dict, user_id, tempmail_api_key):
     """
     Attempts to create a Facebook Business Manager account.
@@ -63,26 +77,6 @@ def create_facebook_business(cookies_dict, user_id, tempmail_api_key):
         logger.warning("⚠️ Business created but no invitation link received.")
         return False, biz_id, None, "Business created but no invitation link received (TempMail issue or delay)."
 
-def get_facebook_token(cookies):
-    """Extracts the Facebook token from the cookies."""
-    # Implement token extraction logic here
-    pass
-
-def create_business(cookies, token_value, user_id, business_name, first_name, last_name, email):
-    """Creates a business using the Facebook API."""
-    # Implement business creation logic here
-    pass
-
-def setup_business_review(cookies, token_value, user_id, biz_id, admin_email):
-    """Completes business setup with review card mutation."""
-    # Implement business setup logic here
-    pass
-
-def wait_for_invitation_email(admin_email):
-    """Waits for the invitation email and extracts the link."""
-    # Implement email waiting logic here
-    pass
-
 def generate_random_name():
     """Generate random realistic names."""
     first_names = ['Ahmed', 'Mohamed', 'Omar', 'Ali', 'Hassan', 'Mahmoud', 'Youssef', 'Khaled', 'Amr', 'Tamer', 
@@ -124,3 +118,23 @@ def generate_random_user_agent():
     chrome_versions = ['131.0.0.0', '130.0.0.0', '129.0.0.0', '128.0.0.0']
     version = random.choice(chrome_versions)
     return f'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{version} Safari/537.36'
+
+def get_facebook_token(cookies):
+    """Extracts the Facebook token from the cookies."""
+    # Implement token extraction logic here
+    pass
+
+def create_business(cookies, token_value, user_id, business_name, first_name, last_name, email):
+    """Creates a business using the Facebook API."""
+    # Implement business creation logic here
+    pass
+
+def setup_business_review(cookies, token_value, user_id, biz_id, admin_email):
+    """Completes business setup with review card mutation."""
+    # Implement business setup logic here
+    pass
+
+def wait_for_invitation_email(admin_email):
+    """Waits for the invitation email and extracts the link."""
+    # Implement email waiting logic here
+    pass
