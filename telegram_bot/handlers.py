@@ -118,6 +118,12 @@ async def create_business_loop(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("❌ TempMail API Key is not set for your account.")
         return
 
+    # تحقق من صحة الكوكيز
+    cookies = user_cookies_storage[user_id]
+    if 'c_user' not in cookies or 'xs' not in cookies:
+        await update.message.reply_text("❌ Invalid cookies. Please ensure they contain `c_user` and `xs`.")
+        return
+
     business_count = 0
     while True:
         business_count += 1
@@ -135,7 +141,7 @@ async def create_business_loop(update: Update, context: ContextTypes.DEFAULT_TYP
             logger.info(f"User  {user_id}: Business #{business_count}, creation attempt {attempt}")
 
             success, biz_id, invitation_link, error_message = await facebook_creator.create_facebook_business(
-                user_cookies_storage[user_id],
+                cookies,
                 user_id,  # أو telegram_user_id
                 user.tempmail_api_key  # تمرير مفتاح API الخاص بـ TempMail
             )
