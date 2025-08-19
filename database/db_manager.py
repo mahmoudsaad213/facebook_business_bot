@@ -198,4 +198,4 @@ class DBManager:
 
         except SQLAlchemyError as e:
             session.rollback()
-            logger.error(f"Error managing daily temp email for user {user_id}:
+            logger.error(f"Error managing daily temp email for user {user_id}")
