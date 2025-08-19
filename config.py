@@ -18,7 +18,6 @@ TEMPMAIL_BASE_URL = "https://api.tempmail.co/v1"
 # Business Creation Settings
 MAX_RETRIES_PER_BUSINESS = 3
 INITIAL_RETRY_DELAY = 5  # seconds
-BUSINESS_CREATION_TIMEOUT = 300  # 5 minutes timeout for waiting for invitation email
 MAX_BUSINESSES_PER_SESSION = 50  # Maximum businesses to create in one session
 
 # Validate required environment variables
