@@ -37,7 +37,7 @@ class DBManager:
         try:
             user = session.query(User).filter_by(telegram_id=telegram_id).first()
             if user:
-                logger.info(f"User {telegram_id} already exists.")
+                logger.info(f"User  {telegram_id} already exists.")
                 return user
 
             subscription_end_date = None
@@ -52,7 +52,7 @@ class DBManager:
             )
             session.add(new_user)
             session.commit()
-            logger.info(f"User {telegram_id} added successfully.")
+            logger.info(f"User  {telegram_id} added successfully.")
             return new_user
         except SQLAlchemyError as e:
             session.rollback()
@@ -78,7 +78,7 @@ class DBManager:
         try:
             session.merge(user)
             session.commit()
-            logger.info(f"User {user.telegram_id} updated successfully.")
+            logger.info(f"User  {user.telegram_id} updated successfully.")
             return True
         except SQLAlchemyError as e:
             session.rollback()
@@ -95,9 +95,9 @@ class DBManager:
             if user:
                 session.delete(user)
                 session.commit()
-                logger.info(f"User {telegram_id} deleted successfully.")
+                logger.info(f"User  {telegram_id} deleted successfully.")
                 return True
-            logger.info(f"User {telegram_id} not found for deletion.")
+            logger.info(f"User  {telegram_id} not found for deletion.")
             return False
         except SQLAlchemyError as e:
             session.rollback()
@@ -106,7 +106,7 @@ class DBManager:
         finally:
             session.close()
 
-    def get_all_users(self) -> list[User]:
+    def get_all_users(self) -> list[User ]:
         """Retrieves all users from the database."""
         session = self.get_session()
         try:
@@ -129,7 +129,7 @@ class DBManager:
         try:
             user = session.query(User).filter_by(telegram_id=telegram_id).first()
             if not user:
-                logger.info(f"User {telegram_id} not found for renewal.")
+                logger.info(f"User  {telegram_id} not found for renewal.")
                 return False
 
             current_end_date = user.subscription_end_date if user.subscription_end_date and user.subscription_end_date >= date.today() else date.today()
@@ -163,39 +163,3 @@ class DBManager:
             raise
         finally:
             session.close()
-
-    async def get_or_create_daily_temp_email(self, user_id: int, api_key: str) -> str:
-        """
-        Retrieves the user's daily temporary email address.
-        Creates a new one if it's a new day or no email is stored.
-        """
-        from services.tempmail_api import tempmail_api
-        
-        session = self.get_session()
-        try:
-            user = session.query(User).filter_by(telegram_id=user_id).first()
-            if not user:
-                raise ValueError(f"User {user_id} not found in database.")
-
-            today = date.today()
-
-            # Check if we already have an email for today
-            if user.last_email_creation_date == today and user.current_temp_email_address:
-                logger.info(f"Using existing daily email for user {user_id}: {user.current_temp_email_address}")
-                return user.current_temp_email_address
-            
-            # If not, create a new one
-            logger.info(f"Creating new daily email for user {user_id}...")
-            new_email = tempmail_api.create_temp_email(api_key)
-            if not new_email:
-                raise Exception("Failed to create new temporary email.")
-
-            user.last_email_creation_date = today
-            user.current_temp_email_address = new_email
-            session.commit()
-            logger.info(f"New daily email created and saved for user {user_id}: {new_email}")
-            return new_email
-
-        except SQLAlchemyError as e:
-            session.rollback()
-            logger.error(f"Error managing daily temp email for user {user_id}")
