@@ -33,18 +33,17 @@ async def error_handler(update: object, context: CallbackContext) -> None:
     tb_string = "".join(traceback.format_exception(None, context.error, context.error.__traceback__))
     logger.error(f"Full traceback:\n{tb_string}")
 
-    # Escape markdown for the error message
-    from utils.helpers import escape_markdown_v2
-    escaped_error_message = escape_markdown_v2(str(context.error))
-    
+    # Removed escape_markdown_v2 as we are not using MarkdownV2
+    escaped_error_message = str(context.error) # Just convert to string
+
     message = (
-        "An unexpected error occurred while processing your request\\. "
-        "The developers have been notified\\.\n\n"
-        f"Error: `{escaped_error_message}`"
+        "An unexpected error occurred while processing your request. "
+        "The developers have been notified.\n\n"
+        f"Error: {escaped_error_message}"
     )
     
     if update.effective_message:
-        await update.effective_message.reply_text(message, parse_mode='MarkdownV2')
+        await update.effective_message.reply_text(message) # Removed parse_mode
     else:
         logger.warning("Error handler called without an effective message.")
 
