@@ -2,7 +2,7 @@
 from sqlalchemy import Column, BigInteger, String, Boolean, Date, DateTime, Integer
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql import func
-
+from database.db_manager import DBManager as db_manager
 Base = declarative_base()
 
 class User(Base):
