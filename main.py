@@ -3,7 +3,7 @@ import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from database.db_manager import DBManager
-from handlers import handle_cookies_message, create_business_loop, start_command, help_command, error_handler
+from telegram_bot.handlers import handle_cookies_message, create_business_loop, start_command, help_command, error_handler
 
 # Configure logging
 logging.basicConfig(
