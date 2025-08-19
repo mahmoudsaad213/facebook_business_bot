@@ -37,7 +37,7 @@ class DBManager:
         try:
             user = session.query(User).filter_by(telegram_id=telegram_id).first()
             if user:
-                logger.info(f"User  {telegram_id} already exists.")
+                logger.info(f"User {telegram_id} already exists.")
                 return user
 
             subscription_end_date = None
@@ -52,7 +52,7 @@ class DBManager:
             )
             session.add(new_user)
             session.commit()
-            logger.info(f"User  {telegram_id} added successfully.")
+            logger.info(f"User {telegram_id} added successfully.")
             return new_user
         except SQLAlchemyError as e:
             session.rollback()
@@ -78,7 +78,7 @@ class DBManager:
         try:
             session.merge(user)
             session.commit()
-            logger.info(f"User  {user.telegram_id} updated successfully.")
+            logger.info(f"User {user.telegram_id} updated successfully.")
             return True
         except SQLAlchemyError as e:
             session.rollback()
@@ -92,4 +92,17 @@ class DBManager:
         session = self.get_session()
         try:
             user = session.query(User).filter_by(telegram_id=telegram_id).first()
-            if
+            if user:
+                session.delete(user)
+                session.commit()
+                logger.info(f"User {telegram_id} deleted successfully.")
+                return True
+            else:
+                logger.info(f"User {telegram_id} not found for deletion.")
+                return False
+        except SQLAlchemyError as e:
+            session.rollback()
+            logger.error(f"Error deleting user {telegram_id}: {e}")
+            raise
+        finally:
+            session.close()
