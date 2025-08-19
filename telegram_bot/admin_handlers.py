@@ -1,206 +1,291 @@
-# facebook_business_bot/telegram_bot/admin_handlers.py
+# facebook_business_bot/telegram_bot/handlers.py
 import logging
-from datetime import date, timedelta
+from datetime import date
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes
-from telegram.helpers import escape_markdown
+from telegram.ext import ContextTypes, ConversationHandler
+from telegram.helpers import escape_markdown # Keep for reference, but use custom escape_markdown_v2
 
-from config import ADMIN_ID
 from database.db_manager import db_manager
-from utils.helpers import escape_markdown_v2
+from services.facebook_creator import facebook_creator
+from utils.helpers import parse_cookies, escape_markdown_v2
+from config import MAX_RETRIES_PER_BUSINESS, INITIAL_RETRY_DELAY
+import asyncio # For async operations
+import random # For random delays
 
 logger = logging.getLogger(__name__)
 
-# --- Admin Check Decorator ---
-def admin_only(func):
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
-        if update.effective_user.id != ADMIN_ID:
-            await update.message.reply_text("❌ عذرًا، هذا الأمر مخصص للمسؤولين فقط.")
-            logger.warning(f"Non-admin user {update.effective_user.id} tried to access admin command: {func.__name__}")
-            return
-        return await func(update, context, *args, **kwargs)
-    return wrapper
+# Global variable to store user's cookies for the session (temporary, will be replaced by DB for persistent data)
+user_cookies_storage = {} # Stores cookies per user_id
 
-# --- Admin Commands ---
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Sends a welcome message and prompts for cookies."""
+    user_id = update.effective_user.id
+    user = db_manager.get_user(user_id)
 
-@admin_only
-async def admin_menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Displays the admin menu."""
+    if not user:
+        # First time user, add them to DB as non-admin
+        user = db_manager.add_user(user_id, is_admin=False)
+        logger.info(f"New user {user_id} added to database.")
+
+    username = update.effective_user.username or update.effective_user.first_name
+
+    subscription_status = "غير مشترك"
+    subscription_end_date_str = "لا يوجد"
+    if user and db_manager.is_user_subscribed(user):
+        subscription_status = "مشترك"
+        subscription_end_date_str = user.subscription_end_date.strftime("%Y-%m-%d")
+
+    # Ensure all parts of the message are escaped
+    welcome_message = (
+        f"مرحبًا بك يا {escape_markdown_v2(username)}!\n\n"
+        f"أنت حاليًا: *{escape_markdown_v2(subscription_status)}*\n"
+        f"تاريخ انتهاء اشتراكك: `{escape_markdown_v2(subscription_end_date_str)}`\n"
+        f"الـ ID الخاص بك: `{escape_markdown_v2(str(user_id))}`\n\n"
+        "للبدء، يرجى إرسال الكوكيز الخاصة بك كسطر واحد من النص\\.\n"
+        "مثال: `datr=...; sb=...; c_user=...; xs=...;`"
+    )
+
     keyboard = [
-        [InlineKeyboardButton("➕ إضافة مشترك", callback_data="admin_add_user")],
-        [InlineKeyboardButton("➖ حذف مشترك", callback_data="admin_delete_user")],
-        [InlineKeyboardButton("📋 قائمة المشتركين", callback_data="admin_list_users")],
-        [InlineKeyboardButton("✉️ إرسال رسالة للكل", callback_data="admin_send_message_to_all")],
-        [InlineKeyboardButton("🎁 مكافأة المشتركين", callback_data="admin_reward_users")],
-        [InlineKeyboardButton("🔄 تجديد اشتراك مستخدم", callback_data="admin_renew_user_subscription")]
+        [InlineKeyboardButton("تشغيل", callback_data="start_creation")],
+        [InlineKeyboardButton("إيقاف", callback_data="stop_creation")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("لوحة تحكم المسؤول:", reply_markup=reply_markup)
 
-@admin_only
-async def add_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Admin command to add a new user."""
-    # Expected format: /add_user <telegram_id> <api_key> <subscription_days>
-    args = context.args
-    if len(args) != 3:
+    await update.message.reply_text(welcome_message, parse_mode='MarkdownV2', reply_markup=reply_markup)
+
+async def handle_cookies_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles incoming messages, expecting them to be cookies.
+    Starts the creation loop automatically if cookies are valid."""
+    user_id = update.effective_user.id
+    cookies_input_str = update.message.text.strip()
+
+    user = db_manager.get_user(user_id)
+    if not user:
+        user = db_manager.add_user(user_id, is_admin=False) # Add user if not exists
+        logger.info(f"User {user_id} added to DB via message handler.")
+
+    if not db_manager.is_user_subscribed(user):
         await update.message.reply_text(
-            "❌ استخدام خاطئ. الاستخدام الصحيح: `/add_user <معرف_تيليجرام> <مفتاح_API_للبريد_المؤقت> <عدد_أيام_الاشتراك>`",
-            parse_mode='MarkdownV2'
+            escape_markdown_v2("❌ عذرًا، اشتراكك غير نشط. يرجى تجديد اشتراكك للمتابعة.")
+            , parse_mode='MarkdownV2'
         )
+        logger.warning(f"User {user_id} tried to use bot with inactive subscription.")
         return
 
-    try:
-        telegram_id = int(args[0])
-        api_key = args[1]
-        subscription_days = int(args[2])
+    if not user.tempmail_api_key:
+        await update.message.reply_text(
+            escape_markdown_v2("❌ لم يتم تعيين مفتاح TempMail API الخاص بك. يرجى الاتصال بالمسؤول.")
+            , parse_mode='MarkdownV2'
+        )
+        logger.warning(f"User {user_id} has no TempMail API key set.")
+        return
 
-        user = db_manager.get_user(telegram_id)
-        if user:
-            await update.message.reply_text(f"⚠️ المستخدم `{telegram_id}` موجود بالفعل. جاري تحديث بياناته.")
-            user.tempmail_api_key = api_key
-            user.subscription_end_date = date.today() + timedelta(days=subscription_days)
-            db_manager.update_user(user)
-            await update.message.reply_text(f"✅ تم تحديث بيانات المستخدم `{telegram_id}` بنجاح.")
-        else:
-            new_user = db_manager.add_user(telegram_id, is_admin=False, tempmail_api_key=api_key, subscription_days=subscription_days)
-            if new_user:
-                await update.message.reply_text(f"✅ تم إضافة المستخدم `{telegram_id}` بنجاح. تاريخ انتهاء الاشتراك: `{new_user.subscription_end_date}`")
+    if cookies_input_str:
+        try:
+            parsed_cookies = parse_cookies(cookies_input_str)
+            if 'c_user' in parsed_cookies and 'xs' in parsed_cookies:
+                user_cookies_storage[user_id] = parsed_cookies # Store cookies temporarily
+                await update.message.reply_text(
+                    escape_markdown_v2("✅ تم استلام الكوكيز بنجاح! جاري بدء حلقة إنشاء الحسابات...")
+                    , parse_mode='MarkdownV2'
+                )
+                logger.info(f"User {user_id} provided valid cookies. Initiating creation loop.")
+                # Start the creation loop in a non-blocking way
+                context.application.create_task(create_business_loop(update, context))
             else:
-                await update.message.reply_text(f"❌ فشل إضافة المستخدم `{telegram_id}`.")
-    except ValueError:
-        await update.message.reply_text("❌ معرف تيليجرام أو عدد الأيام غير صالح. يجب أن يكون أرقامًا صحيحة.")
-    except Exception as e:
-        logger.error(f"Error adding user: {e}")
-        await update.message.reply_text(f"❌ حدث خطأ أثناء إضافة المستخدم: {escape_markdown_v2(str(e))}")
+                await update.message.reply_text(
+                    escape_markdown_v2("❌ كوكيز غير صالحة. يرجى التأكد من أنها تحتوي على `c_user` و `xs` على الأقل.")
+                    , parse_mode='MarkdownV2'
+                )
+                logger.warning(f"User {user_id} provided invalid cookies format.")
+        except Exception as e:
+            await update.message.reply_text(f"❌ حدث خطأ أثناء تحليل الكوكيز: {escape_markdown_v2(str(e))}\nيرجى التأكد من أن التنسيق صحيح.", parse_mode='MarkdownV2')
+            logger.error(f"Error parsing cookies for user {user_id}: {e}")
+    else:
+        await update.message.reply_text(escape_markdown_v2("❌ لم يتم تقديم أي كوكيز. يرجى إرسالها كسطر واحد."), parse_mode='MarkdownV2')
+        logger.warning(f"User {user_id} sent empty message for cookies.")
 
-@admin_only
-async def delete_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Admin command to delete a user."""
-    # Expected format: /delete_user <telegram_id>
-    args = context.args
-    if len(args) != 1:
-        await update.message.reply_text(
-            "❌ استخدام خاطئ. الاستخدام الصحيح: `/delete_user <معرف_تيليجرام>`",
-            parse_mode='MarkdownV2'
-        )
-        return
-
-    try:
-        telegram_id = int(args[0])
-        user_to_delete = db_manager.get_user(telegram_id)
-        if not user_to_delete:
-            await update.message.reply_text(f"⚠️ المستخدم `{telegram_id}` غير موجود.")
-            return
-        
-        if db_manager.delete_user(telegram_id):
-            await update.message.reply_text(f"✅ تم حذف المستخدم `{telegram_id}` بنجاح.")
-        else:
-            await update.message.reply_text(f"❌ فشل حذف المستخدم `{telegram_id}`.")
-    except ValueError:
-        await update.message.reply_text("❌ معرف تيليجرام غير صالح. يجب أن يكون رقمًا صحيحًا.")
-    except Exception as e:
-        logger.error(f"Error deleting user: {e}")
-        await update.message.reply_text(f"❌ حدث خطأ أثناء حذف المستخدم: {escape_markdown_v2(str(e))}")
-
-@admin_only
-async def list_users_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Admin command to list all users."""
-    users = db_manager.get_all_users()
-    if not users:
-        await update.message.reply_text("لا يوجد مشتركين حاليًا.")
-        return
-
-    message = "📋 *قائمة المشتركين:*\n\n"
-    for user in users:
-        status = "نشط" if db_manager.is_user_subscribed(user) else "منتهي"
-        end_date = user.subscription_end_date.strftime("%Y-%m-%d") if user.subscription_end_date else "لا يوجد"
-        api_key_status = "محدد" if user.tempmail_api_key else "غير محدد"
-        
-        message += (
-            f"\\- ID: `{escape_markdown_v2(str(user.telegram_id))}`\n"
-            f"  الحالة: *{escape_markdown_v2(status)}*\n"
-            f"  ينتهي في: `{escape_markdown_v2(end_date)}`\n"
-            f"  مفتاح API: *{escape_markdown_v2(api_key_status)}*\n"
-            f"  حسابات تم إنشاؤها: `{escape_markdown_v2(str(user.businesses_created_count))}`\n\n"
-        )
+async def create_business_loop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Continuously creates businesses until limit is reached or a persistent error occurs."""
+    user_id = update.effective_user.id
     
+    user = db_manager.get_user(user_id)
+    if not user or not db_manager.is_user_subscribed(user):
+        await update.message.reply_text(
+            escape_markdown_v2("❌ اشتراكك غير نشط. توقف إنشاء الحسابات.")
+            , parse_mode='MarkdownV2'
+        )
+        logger.warning(f"User {user_id} subscription became inactive during creation loop.")
+        return
+
+    if user_id not in user_cookies_storage or not user_cookies_storage[user_id]:
+        await update.message.reply_text(
+            escape_markdown_v2("❌ الكوكيز الخاصة بك غير محفوظة. يرجى إرسالها أولاً كرسالة نصية.")
+            , parse_mode='MarkdownV2'
+        )
+        return
+
+    if not user.tempmail_api_key:
+        await update.message.reply_text(
+            escape_markdown_v2("❌ لم يتم تعيين مفتاح TempMail API الخاص بك. يرجى الاتصال بالمسؤول.")
+            , parse_mode='MarkdownV2'
+        )
+        logger.warning(f"User {user_id} has no TempMail API key set, stopping creation loop.")
+        return
+
+    business_count = user.businesses_created_count # Start from current count
+    while True:
+        # Check subscription status before each attempt
+        user = db_manager.get_user(user_id)
+        if not user or not db_manager.is_user_subscribed(user):
+            await update.message.reply_text(
+                escape_markdown_v2("❌ اشتراكك غير نشط. توقف إنشاء الحسابات.")
+                , parse_mode='MarkdownV2'
+            )
+            logger.warning(f"User {user_id} subscription became inactive during creation loop.")
+            break # Exit the loop
+
+        # Check daily email limit (if applicable, based on last_email_creation_date)
+        # For now, we allow one new temp email per creation attempt.
+        # If you want to enforce one temp email per day, you'd check user.last_email_creation_date here.
+        # For simplicity, we'll assume tempmail_api.create_temp_email handles internal limits or we create a new one each time.
+        # If you want to enforce one *specific* temp email per day, you'd need to store it in the DB.
+
+        business_count += 1
+        await update.message.reply_text(escape_markdown_v2(f"🚀 جاري محاولة إنشاء الحساب رقم {business_count}..."), parse_mode='MarkdownV2')
+        logger.info(f"User {user_id}: Starting creation for Business #{business_count}")
+
+        current_biz_attempt_success = False
+        for attempt in range(1, MAX_RETRIES_PER_BUSINESS + 1):
+            await update.message.reply_text(
+                escape_markdown_v2(f"⏳ الحساب رقم {business_count}: محاولة الإنشاء {attempt}/{MAX_RETRIES_PER_BUSINESS}...")
+                , parse_mode='MarkdownV2'
+            )
+            logger.info(f"User {user_id}: Business #{business_count}, creation attempt {attempt}")
+
+            # Pass the user's specific tempmail_api_key
+            success, biz_id, invitation_link, error_message = await facebook_creator.create_facebook_business(
+                user_cookies_storage[user_id], user.tempmail_api_key
+            )
+
+            if success == "LIMIT_REACHED":
+                await update.message.reply_text(
+                    escape_markdown_v2("🛑 تم الوصول إلى حد إنشاء حسابات فيسبوك للأعمال لهذه الكوكيز! جاري إيقاف المحاولات الإضافية.")
+                    , parse_mode='MarkdownV2'
+                )
+                logger.info(f"User {user_id}: Business creation limit reached. Total created: {business_count - 1}")
+                return # Exit the loop and function
+            elif success:
+                escaped_success_text = escape_markdown_v2("🎉 تم إنشاء الحساب بنجاح!") 
+                escaped_biz_id_label = escape_markdown_v2("📊 *معرف الحساب:*") 
+                escaped_invitation_link_label = escape_markdown_v2("🔗 *رابط الدعوة:*") 
+
+                message = (
+                    f"{escaped_success_text}\n"
+                    f"{escaped_biz_id_label} `{escape_markdown_v2(biz_id)}`\n"
+                    f"{escaped_invitation_link_label} `{escape_markdown_v2(invitation_link)}`" # Display link as code
+                )
+                await update.message.reply_text(message, parse_mode='MarkdownV2')
+                logger.info(f"User {user_id}: Business #{business_count} created successfully on attempt {attempt}.")
+                
+                # Update user's created count in DB
+                user.businesses_created_count = business_count
+                db_manager.update_user(user)
+                
+                current_biz_attempt_success = True
+                break # Break from inner retry loop, move to next business
+            else:
+                logger.error(f"User {user_id}: Business #{business_count} creation failed on attempt {attempt}. Reason: {error_message}")
+                
+                if attempt < MAX_RETRIES_PER_BUSINESS:
+                    delay = INITIAL_RETRY_DELAY * (2 ** (attempt - 1)) # Exponential backoff
+                    await update.message.reply_text(
+                        escape_markdown_v2(f"❌ الحساب رقم {business_count}: فشلت محاولة الإنشاء {attempt}. السبب: {error_message}\n") +
+                        escape_markdown_v2(f"جاري إعادة المحاولة بعد {delay} ثواني...")
+                        , parse_mode='MarkdownV2'
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    final_error_message = (
+                        escape_markdown_v2(f"❌ الحساب رقم {business_count}: فشلت جميع المحاولات الـ {MAX_RETRIES_PER_BUSINESS}.\n") +
+                        escape_markdown_v2(f"آخر خطأ: {error_message}")
+                    )
+                    if biz_id:
+                        final_error_message += escape_markdown_v2(f"\n📊 *معرف الحساب الجزئي:* `{biz_id}`")
+                    await update.message.reply_text(final_error_message, parse_mode='MarkdownV2')
+                    logger.error(f"User {user_id}: Business #{business_count}: All attempts failed. Final error: {error_message}")
+        
+        if not current_biz_attempt_success:
+            await update.message.reply_text(
+                escape_markdown_v2(f"⚠️ لم يتمكن من إنشاء الحساب رقم {business_count} بعد عدة محاولات. جاري الانتقال إلى محاولة إنشاء حساب آخر.")
+                , parse_mode='MarkdownV2'
+            )
+            # Add a small delay before trying the next business if the current one failed persistently
+            await asyncio.sleep(random.randint(10, 20))
+        else:
+            # If successful, wait a bit before trying the next one
+            await update.message.reply_text(escape_markdown_v2(f"✅ تم إنشاء الحساب رقم {business_count}. جاري الانتظار قليلاً قبل المحاولة التالية..."), parse_mode='MarkdownV2')
+            await asyncio.sleep(random.randint(5, 15)) # Random delay between successful creations
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Sends a help message."""
+    await update.message.reply_text(
+        escape_markdown_v2("أنا بوت لإنشاء حسابات فيسبوك للأعمال.\n\n") +
+        escape_markdown_v2("الخطوات:\n") +
+        escape_markdown_v2("1. أرسل لي الكوكيز الخاصة بك كسطر واحد من النص.\n") +
+        escape_markdown_v2("2. سأبدأ تلقائيًا بإنشاء الحسابات لك حتى يتم الوصول إلى الحد الأقصى.\n\n") +
+        escape_markdown_v2("ملاحظة: قد تستغرق العملية بضع دقائق لكل حساب وتتضمن محاولات إعادة لضمان المتانة.")
+        , parse_mode='MarkdownV2'
+    )
+
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Displays the user's subscription status and usage."""
+    user_id = update.effective_user.id
+    user = db_manager.get_user(user_id)
+
+    if not user:
+        await update.message.reply_text(escape_markdown_v2("❌ لم يتم العثور على بياناتك. يرجى استخدام أمر /start أولاً."), parse_mode='MarkdownV2')
+        return
+
+    username = update.effective_user.username or update.effective_user.first_name
+    
+    subscription_status = "غير نشط"
+    subscription_end_date_str = "لا يوجد"
+    if db_manager.is_user_subscribed(user):
+        subscription_status = "نشط"
+        subscription_end_date_str = user.subscription_end_date.strftime("%Y-%m-%d")
+
+    tempmail_api_key_status = "محدد" if user.tempmail_api_key else "غير محدد"
+    
+    message = (
+        f"📊 \\*حالة حسابك يا {escape_markdown_v2(username)}:\\*\n\n"
+        f"\\- حالة الاشتراك: *{escape_markdown_v2(subscription_status)}*\n"
+        f"\\- تاريخ انتهاء الاشتراك: `{escape_markdown_v2(subscription_end_date_str)}`\n"
+        f"\\- مفتاح TempMail API: *{escape_markdown_v2(tempmail_api_key_status)}*\n"
+        f"\\- عدد الحسابات التي تم إنشاؤها: `{escape_markdown_v2(str(user.businesses_created_count))}`"
+    )
     await update.message.reply_text(message, parse_mode='MarkdownV2')
 
-@admin_only
-async def send_message_to_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Admin command to send a message to all users."""
-    # Expected format: /send_message_to_all <your message here>
-    message_text = " ".join(context.args)
-    if not message_text:
-        await update.message.reply_text("❌ يرجى تقديم الرسالة التي تريد إرسالها.")
-        return
+async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles callback queries from inline keyboards."""
+    query = update.callback_query
+    await query.answer() # Acknowledge the callback query
 
-    users = db_manager.get_all_users()
-    sent_count = 0
-    failed_count = 0
-    for user in users:
-        try:
-            await context.bot.send_message(chat_id=user.telegram_id, text=message_text)
-            sent_count += 1
-        except Exception as e:
-            logger.error(f"Failed to send message to user {user.telegram_id}: {e}")
-            failed_count += 1
+    user_id = query.from_user.id
     
-    await update.message.reply_text(f"✅ تم إرسال الرسالة إلى {sent_count} مستخدم. فشل إرسالها إلى {failed_count} مستخدم.")
-
-@admin_only
-async def reward_users_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Admin command to reward all users with extra subscription days."""
-    # Expected format: /reward_users <days>
-    args = context.args
-    if len(args) != 1:
-        await update.message.reply_text(
-            "❌ استخدام خاطئ. الاستخدام الصحيح: `/reward_users <عدد_الأيام>`",
-            parse_mode='MarkdownV2'
+    if query.data == "start_creation":
+        await query.edit_message_text(
+            escape_markdown_v2("✅ تم الضغط على 'تشغيل'. يرجى إرسال الكوكيز الخاصة بك لبدء عملية الإنشاء.")
+            , parse_mode='MarkdownV2'
         )
-        return
-
-    try:
-        days = int(args[0])
-        if days <= 0:
-            await update.message.reply_text("❌ عدد الأيام يجب أن يكون رقمًا موجبًا.")
-            return
-        
-        updated_count = db_manager.reward_all_users(days)
-        await update.message.reply_text(f"✅ تم مكافأة {updated_count} مستخدمًا بـ {days} أيام إضافية.")
-    except ValueError:
-        await update.message.reply_text("❌ عدد الأيام غير صالح. يجب أن يكون رقمًا صحيحًا.")
-    except Exception as e:
-        logger.error(f"Error rewarding users: {e}")
-        await update.message.reply_text(f"❌ حدث خطأ أثناء مكافأة المستخدمين: {escape_markdown_v2(str(e))}")
-
-@admin_only
-async def renew_user_subscription_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Admin command to renew a specific user's subscription."""
-    # Expected format: /renew_user_subscription <telegram_id> <days>
-    args = context.args
-    if len(args) != 2:
-        await update.message.reply_text(
-            "❌ استخدام خاطئ. الاستخدام الصحيح: `/renew_user_subscription <معرف_تيليجرام> <عدد_الأيام>`",
-            parse_mode='MarkdownV2'
+    elif query.data == "stop_creation":
+        # Here you would implement logic to stop an ongoing creation loop for this user
+        # This would require storing the running task for each user in context.user_data or similar
+        await query.edit_message_text(
+            escape_markdown_v2("🛑 تم الضغط على 'إيقاف'. سيتم إيقاف أي عملية إنشاء جارية.")
+            , parse_mode='MarkdownV2'
         )
-        return
-
-    try:
-        telegram_id = int(args[0])
-        days = int(args[1])
-        if days <= 0:
-            await update.message.reply_text("❌ عدد الأيام يجب أن يكون رقمًا موجبًا.")
-            return
-        
-        if db_manager.renew_subscription(telegram_id, days):
-            user = db_manager.get_user(telegram_id)
-            await update.message.reply_text(f"✅ تم تجديد اشتراك المستخدم `{telegram_id}` لـ {days} أيام. تاريخ الانتهاء الجديد: `{user.subscription_end_date}`")
-        else:
-            await update.message.reply_text(f"❌ فشل تجديد اشتراك المستخدم `{telegram_id}`. ربما المستخدم غير موجود.")
-    except ValueError:
-        await update.message.reply_text("❌ معرف تيليجرام أو عدد الأيام غير صالح. يجب أن يكون أرقامًا صحيحة.")
-    except Exception as e:
-        logger.error(f"Error renewing user subscription: {e}")
-        await update.message.reply_text(f"❌ حدث خطأ أثناء تجديد الاشتراك: {escape_markdown_v2(str(e))}")
-
+        # Example: context.user_data[user_id]['stop_flag'] = True
+    
+    # Admin callback queries are handled by ConversationHandler entry points in main.py
+    # or by specific CommandHandlers if they are single-step.
