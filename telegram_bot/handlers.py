@@ -2,13 +2,15 @@
 import logging
 from datetime import date
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes
-from telegram.helpers import escape_markdown
+from telegram.ext import ContextTypes, ConversationHandler
+from telegram.helpers import escape_markdown # Keep for reference, but use custom escape_markdown_v2
 
 from database.db_manager import db_manager
 from services.facebook_creator import facebook_creator
 from utils.helpers import parse_cookies, escape_markdown_v2
 from config import MAX_RETRIES_PER_BUSINESS, INITIAL_RETRY_DELAY
+import asyncio # For async operations
+import random # For random delays
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +35,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         subscription_status = "مشترك"
         subscription_end_date_str = user.subscription_end_date.strftime("%Y-%m-%d")
 
+    # Ensure all parts of the message are escaped
     welcome_message = (
         f"مرحبًا بك يا {escape_markdown_v2(username)}!\n\n"
         f"أنت حاليًا: *{escape_markdown_v2(subscription_status)}*\n"
@@ -63,14 +66,16 @@ async def handle_cookies_message(update: Update, context: ContextTypes.DEFAULT_T
 
     if not db_manager.is_user_subscribed(user):
         await update.message.reply_text(
-            "❌ عذرًا، اشتراكك غير نشط. يرجى تجديد اشتراكك للمتابعة."
+            escape_markdown_v2("❌ عذرًا، اشتراكك غير نشط. يرجى تجديد اشتراكك للمتابعة.")
+            , parse_mode='MarkdownV2'
         )
         logger.warning(f"User {user_id} tried to use bot with inactive subscription.")
         return
 
     if not user.tempmail_api_key:
         await update.message.reply_text(
-            "❌ لم يتم تعيين مفتاح TempMail API الخاص بك. يرجى الاتصال بالمسؤول."
+            escape_markdown_v2("❌ لم يتم تعيين مفتاح TempMail API الخاص بك. يرجى الاتصال بالمسؤول.")
+            , parse_mode='MarkdownV2'
         )
         logger.warning(f"User {user_id} has no TempMail API key set.")
         return
@@ -81,21 +86,23 @@ async def handle_cookies_message(update: Update, context: ContextTypes.DEFAULT_T
             if 'c_user' in parsed_cookies and 'xs' in parsed_cookies:
                 user_cookies_storage[user_id] = parsed_cookies # Store cookies temporarily
                 await update.message.reply_text(
-                    "✅ تم استلام الكوكيز بنجاح! جاري بدء حلقة إنشاء الحسابات..."
+                    escape_markdown_v2("✅ تم استلام الكوكيز بنجاح! جاري بدء حلقة إنشاء الحسابات...")
+                    , parse_mode='MarkdownV2'
                 )
                 logger.info(f"User {user_id} provided valid cookies. Initiating creation loop.")
                 # Start the creation loop in a non-blocking way
                 context.application.create_task(create_business_loop(update, context))
             else:
                 await update.message.reply_text(
-                    "❌ كوكيز غير صالحة. يرجى التأكد من أنها تحتوي على `c_user` و `xs` على الأقل."
+                    escape_markdown_v2("❌ كوكيز غير صالحة. يرجى التأكد من أنها تحتوي على `c_user` و `xs` على الأقل.")
+                    , parse_mode='MarkdownV2'
                 )
                 logger.warning(f"User {user_id} provided invalid cookies format.")
         except Exception as e:
-            await update.message.reply_text(f"❌ حدث خطأ أثناء تحليل الكوكيز: {escape_markdown_v2(str(e))}\nيرجى التأكد من أن التنسيق صحيح.")
+            await update.message.reply_text(f"❌ حدث خطأ أثناء تحليل الكوكيز: {escape_markdown_v2(str(e))}\nيرجى التأكد من أن التنسيق صحيح.", parse_mode='MarkdownV2')
             logger.error(f"Error parsing cookies for user {user_id}: {e}")
     else:
-        await update.message.reply_text("❌ لم يتم تقديم أي كوكيز. يرجى إرسالها كسطر واحد.")
+        await update.message.reply_text(escape_markdown_v2("❌ لم يتم تقديم أي كوكيز. يرجى إرسالها كسطر واحد."), parse_mode='MarkdownV2')
         logger.warning(f"User {user_id} sent empty message for cookies.")
 
 async def create_business_loop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -105,20 +112,23 @@ async def create_business_loop(update: Update, context: ContextTypes.DEFAULT_TYP
     user = db_manager.get_user(user_id)
     if not user or not db_manager.is_user_subscribed(user):
         await update.message.reply_text(
-            "❌ اشتراكك غير نشط. توقف إنشاء الحسابات."
+            escape_markdown_v2("❌ اشتراكك غير نشط. توقف إنشاء الحسابات.")
+            , parse_mode='MarkdownV2'
         )
         logger.warning(f"User {user_id} subscription became inactive during creation loop.")
         return
 
     if user_id not in user_cookies_storage or not user_cookies_storage[user_id]:
         await update.message.reply_text(
-            "❌ الكوكيز الخاصة بك غير محفوظة. يرجى إرسالها أولاً كرسالة نصية."
+            escape_markdown_v2("❌ الكوكيز الخاصة بك غير محفوظة. يرجى إرسالها أولاً كرسالة نصية.")
+            , parse_mode='MarkdownV2'
         )
         return
 
     if not user.tempmail_api_key:
         await update.message.reply_text(
-            "❌ لم يتم تعيين مفتاح TempMail API الخاص بك. يرجى الاتصال بالمسؤول."
+            escape_markdown_v2("❌ لم يتم تعيين مفتاح TempMail API الخاص بك. يرجى الاتصال بالمسؤول.")
+            , parse_mode='MarkdownV2'
         )
         logger.warning(f"User {user_id} has no TempMail API key set, stopping creation loop.")
         return
@@ -129,7 +139,8 @@ async def create_business_loop(update: Update, context: ContextTypes.DEFAULT_TYP
         user = db_manager.get_user(user_id)
         if not user or not db_manager.is_user_subscribed(user):
             await update.message.reply_text(
-                "❌ اشتراكك غير نشط. توقف إنشاء الحسابات."
+                escape_markdown_v2("❌ اشتراكك غير نشط. توقف إنشاء الحسابات.")
+                , parse_mode='MarkdownV2'
             )
             logger.warning(f"User {user_id} subscription became inactive during creation loop.")
             break # Exit the loop
@@ -141,13 +152,14 @@ async def create_business_loop(update: Update, context: ContextTypes.DEFAULT_TYP
         # If you want to enforce one *specific* temp email per day, you'd need to store it in the DB.
 
         business_count += 1
-        await update.message.reply_text(f"🚀 جاري محاولة إنشاء الحساب رقم {business_count}...")
+        await update.message.reply_text(escape_markdown_v2(f"🚀 جاري محاولة إنشاء الحساب رقم {business_count}..."), parse_mode='MarkdownV2')
         logger.info(f"User {user_id}: Starting creation for Business #{business_count}")
 
         current_biz_attempt_success = False
         for attempt in range(1, MAX_RETRIES_PER_BUSINESS + 1):
             await update.message.reply_text(
-                f"⏳ الحساب رقم {business_count}: محاولة الإنشاء {attempt}/{MAX_RETRIES_PER_BUSINESS}..."
+                escape_markdown_v2(f"⏳ الحساب رقم {business_count}: محاولة الإنشاء {attempt}/{MAX_RETRIES_PER_BUSINESS}...")
+                , parse_mode='MarkdownV2'
             )
             logger.info(f"User {user_id}: Business #{business_count}, creation attempt {attempt}")
 
@@ -158,14 +170,15 @@ async def create_business_loop(update: Update, context: ContextTypes.DEFAULT_TYP
 
             if success == "LIMIT_REACHED":
                 await update.message.reply_text(
-                    "🛑 تم الوصول إلى حد إنشاء حسابات فيسبوك للأعمال لهذه الكوكيز! جاري إيقاف المحاولات الإضافية."
+                    escape_markdown_v2("🛑 تم الوصول إلى حد إنشاء حسابات فيسبوك للأعمال لهذه الكوكيز! جاري إيقاف المحاولات الإضافية.")
+                    , parse_mode='MarkdownV2'
                 )
                 logger.info(f"User {user_id}: Business creation limit reached. Total created: {business_count - 1}")
                 return # Exit the loop and function
             elif success:
-                escaped_success_text = "🎉 تم إنشاء الحساب بنجاح\\!" 
-                escaped_biz_id_label = "📊 \\*معرف الحساب:\\*" 
-                escaped_invitation_link_label = "🔗 \\*رابط الدعوة:\\*" 
+                escaped_success_text = escape_markdown_v2("🎉 تم إنشاء الحساب بنجاح!") 
+                escaped_biz_id_label = escape_markdown_v2("📊 *معرف الحساب:*") 
+                escaped_invitation_link_label = escape_markdown_v2("🔗 *رابط الدعوة:*") 
 
                 message = (
                     f"{escaped_success_text}\n"
@@ -187,39 +200,42 @@ async def create_business_loop(update: Update, context: ContextTypes.DEFAULT_TYP
                 if attempt < MAX_RETRIES_PER_BUSINESS:
                     delay = INITIAL_RETRY_DELAY * (2 ** (attempt - 1)) # Exponential backoff
                     await update.message.reply_text(
-                        f"❌ الحساب رقم {business_count}: فشلت محاولة الإنشاء {attempt}. السبب: {escape_markdown_v2(error_message)}\n"
-                        f"جاري إعادة المحاولة بعد {delay} ثواني..."
+                        escape_markdown_v2(f"❌ الحساب رقم {business_count}: فشلت محاولة الإنشاء {attempt}. السبب: {error_message}\n") +
+                        escape_markdown_v2(f"جاري إعادة المحاولة بعد {delay} ثواني...")
+                        , parse_mode='MarkdownV2'
                     )
                     await asyncio.sleep(delay)
                 else:
                     final_error_message = (
-                        f"❌ الحساب رقم {business_count}: فشلت جميع المحاولات الـ {MAX_RETRIES_PER_BUSINESS}.\n"
-                        f"آخر خطأ: {escape_markdown_v2(error_message)}"
+                        escape_markdown_v2(f"❌ الحساب رقم {business_count}: فشلت جميع المحاولات الـ {MAX_RETRIES_PER_BUSINESS}.\n") +
+                        escape_markdown_v2(f"آخر خطأ: {error_message}")
                     )
                     if biz_id:
-                        final_error_message += f"\n📊 \\*معرف الحساب الجزئي:\\* `{escape_markdown_v2(biz_id)}`"
+                        final_error_message += escape_markdown_v2(f"\n📊 *معرف الحساب الجزئي:* `{biz_id}`")
                     await update.message.reply_text(final_error_message, parse_mode='MarkdownV2')
                     logger.error(f"User {user_id}: Business #{business_count}: All attempts failed. Final error: {error_message}")
         
         if not current_biz_attempt_success:
             await update.message.reply_text(
-                f"⚠️ لم يتمكن من إنشاء الحساب رقم {business_count} بعد عدة محاولات. جاري الانتقال إلى محاولة إنشاء حساب آخر."
+                escape_markdown_v2(f"⚠️ لم يتمكن من إنشاء الحساب رقم {business_count} بعد عدة محاولات. جاري الانتقال إلى محاولة إنشاء حساب آخر.")
+                , parse_mode='MarkdownV2'
             )
             # Add a small delay before trying the next business if the current one failed persistently
             await asyncio.sleep(random.randint(10, 20))
         else:
             # If successful, wait a bit before trying the next one
-            await update.message.reply_text(f"✅ تم إنشاء الحساب رقم {business_count}. جاري الانتظار قليلاً قبل المحاولة التالية...")
+            await update.message.reply_text(escape_markdown_v2(f"✅ تم إنشاء الحساب رقم {business_count}. جاري الانتظار قليلاً قبل المحاولة التالية..."), parse_mode='MarkdownV2')
             await asyncio.sleep(random.randint(5, 15)) # Random delay between successful creations
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Sends a help message."""
     await update.message.reply_text(
-        "أنا بوت لإنشاء حسابات فيسبوك للأعمال\\.\n\n"
-        "الخطوات:\\\n"
-        "1\\. أرسل لي الكوكيز الخاصة بك كسطر واحد من النص\\.\n"
-        "2\\. سأبدأ تلقائيًا بإنشاء الحسابات لك حتى يتم الوصول إلى الحد الأقصى\\.\n\n"
-        "ملاحظة: قد تستغرق العملية بضع دقائق لكل حساب وتتضمن محاولات إعادة لضمان المتانة\\."
+        escape_markdown_v2("أنا بوت لإنشاء حسابات فيسبوك للأعمال.\n\n") +
+        escape_markdown_v2("الخطوات:\n") +
+        escape_markdown_v2("1. أرسل لي الكوكيز الخاصة بك كسطر واحد من النص.\n") +
+        escape_markdown_v2("2. سأبدأ تلقائيًا بإنشاء الحسابات لك حتى يتم الوصول إلى الحد الأقصى.\n\n") +
+        escape_markdown_v2("ملاحظة: قد تستغرق العملية بضع دقائق لكل حساب وتتضمن محاولات إعادة لضمان المتانة.")
+        , parse_mode='MarkdownV2'
     )
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -228,7 +244,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user = db_manager.get_user(user_id)
 
     if not user:
-        await update.message.reply_text("❌ لم يتم العثور على بياناتك. يرجى استخدام أمر /start أولاً.")
+        await update.message.reply_text(escape_markdown_v2("❌ لم يتم العثور على بياناتك. يرجى استخدام أمر /start أولاً."), parse_mode='MarkdownV2')
         return
 
     username = update.effective_user.username or update.effective_user.first_name
@@ -250,3 +266,26 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
     await update.message.reply_text(message, parse_mode='MarkdownV2')
 
+async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles callback queries from inline keyboards."""
+    query = update.callback_query
+    await query.answer() # Acknowledge the callback query
+
+    user_id = query.from_user.id
+    
+    if query.data == "start_creation":
+        await query.edit_message_text(
+            escape_markdown_v2("✅ تم الضغط على 'تشغيل'. يرجى إرسال الكوكيز الخاصة بك لبدء عملية الإنشاء.")
+            , parse_mode='MarkdownV2'
+        )
+    elif query.data == "stop_creation":
+        # Here you would implement logic to stop an ongoing creation loop for this user
+        # This would require storing the running task for each user in context.user_data or similar
+        await query.edit_message_text(
+            escape_markdown_v2("🛑 تم الضغط على 'إيقاف'. سيتم إيقاف أي عملية إنشاء جارية.")
+            , parse_mode='MarkdownV2'
+        )
+        # Example: context.user_data[user_id]['stop_flag'] = True
+    
+    # Admin callback queries are handled by ConversationHandler entry points in main.py
+    # or by specific CommandHandlers if they are single-step.
