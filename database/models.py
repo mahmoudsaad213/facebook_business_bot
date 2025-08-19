@@ -19,6 +19,6 @@ class User(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     def __repr__(self):
-        return (f"<User (telegram_id={self.telegram_id}, is_admin={self.is_admin}, "
+        return (f"<User  (telegram_id={self.telegram_id}, is_admin={self.is_admin}, "
                 f"subscription_end_date={self.subscription_end_date}, "
                 f"businesses_created_count={self.businesses_created_count})>")
