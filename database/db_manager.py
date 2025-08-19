@@ -6,6 +6,7 @@ from datetime import date, timedelta
 
 from config import DATABASE_URL
 from database.models import Base, User
+from services.tempmail_api import tempmail_api # Import tempmail_api instance
 
 class DBManager:
     def __init__(self):
@@ -157,6 +158,46 @@ class DBManager:
         except SQLAlchemyError as e:
             session.rollback()
             print(f"Error rewarding all users: {e}")
+            raise
+        finally:
+            session.close()
+
+    async def get_or_create_daily_temp_email(self, user_id: int, api_key: str) -> str:
+        """
+        Retrieves the user's daily temporary email address.
+        Creates a new one if it's a new day or no email is stored.
+        """
+        session = self.get_session()
+        try:
+            user = session.query(User).filter_by(telegram_id=user_id).first()
+            if not user:
+                raise ValueError(f"User {user_id} not found in database.")
+
+            today = date.today()
+
+            # Check if we already have an email for today
+            if user.last_email_creation_date == today and user.current_temp_email_address:
+                print(f"Using existing daily email for user {user_id}: {user.current_temp_email_address}")
+                return user.current_temp_email_address
+            
+            # If not, create a new one
+            print(f"Creating new daily email for user {user_id}...")
+            new_email = tempmail_api.create_temp_email(api_key)
+            if not new_email:
+                raise Exception("Failed to create new temporary email.")
+
+            user.last_email_creation_date = today
+            user.current_temp_email_address = new_email
+            session.commit()
+            print(f"New daily email created and saved for user {user_id}: {new_email}")
+            return new_email
+
+        except SQLAlchemyError as e:
+            session.rollback()
+            print(f"Error managing daily temp email for user {user_id}: {e}")
+            raise
+        except Exception as e:
+            print(f"Error in get_or_create_daily_temp_email for user {user_id}: {e}")
             raise
         finally:
             session.close()
