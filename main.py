@@ -2,8 +2,9 @@
 import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from database.db_manager import DBManager
 from telegram_bot.handlers import handle_cookies_message, create_business_loop, start_command, help_command, error_handler
-from database.db_manager import DBManager as db_manager
+
 # Configure logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
