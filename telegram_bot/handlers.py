@@ -59,41 +59,48 @@ async def handle_cookies_message(update: Update, context: ContextTypes.DEFAULT_T
     Starts the creation loop automatically if cookies are valid."""
     user_id = update.effective_user.id
     cookies_input_str = update.message.text.strip()
+
+    user = db_manager.get_user(user_id)
+    if not user:
+        user = db_manager.add_user(user_id, is_admin=False) # Add user if not exists
+        logger.info(f"User {user_id} added to DB via message handler.")
+
+    if not db_manager.is_user_subscribed(user):
+        await update.message.reply_text(
+            "❌ عذرًا، اشتراكك غير نشط. يرجى تجديد اشتراكك للمتابعة."
+        )
+        logger.warning(f"User {user_id} tried to use bot with inactive subscription.")
+        return
+
+    if not user.tempmail_api_key:
+        await update.message.reply_text(
+            "❌ لم يتم تعيين مفتاح TempMail API الخاص بك. يرجى الاتصال بالمسؤول."
+        )
+        logger.warning(f"User {user_id} has no TempMail API key set.")
+        return
+
     if cookies_input_str:
-        # إذا كانت المدخلات عبارة عن ملف، قم بقراءته
-        if cookies_input_str.endswith('.txt'):
-            try:
-                with open(cookies_input_str, 'r') as file:
-                    cookies_list = [line.strip() for line in file if line.strip()]  # تجاهل الأسطر الفارغة
-                if not cookies_list:
-                    await update.message.reply_text("❌ الملف فارغ أو لا يحتوي على كوكيز صحيحة.")
-                    return
-            except Exception as e:
-                await update.message.reply_text(f"❌ حدث خطأ أثناء قراءة الملف: {e}")
-                return
-        else:
-            # إذا كانت المدخلات نصية عادية
-            cookies_list = [cookies_input_str]
-
-        # تحقق من صحة الكوكيز
-        valid_cookies = []
-        for cookies in cookies_list:
-            parsed_cookies = parse_cookies(cookies)
+        try:
+            parsed_cookies = parse_cookies(cookies_input_str)
             if 'c_user' in parsed_cookies and 'xs' in parsed_cookies:
-                valid_cookies.append(parsed_cookies)
+                user_cookies_storage[user_id] = parsed_cookies # Store cookies temporarily
+                await update.message.reply_text(
+                    "✅ تم استلام الكوكيز بنجاح! جاري بدء حلقة إنشاء الحسابات..."
+                )
+                logger.info(f"User {user_id} provided valid cookies. Initiating creation loop.")
+                # Start the creation loop in a non-blocking way
+                context.application.create_task(create_business_loop(update, context))
             else:
-                await update.message.reply_text("❌ الكوكيز غير صحيحة: " + cookies)
-                return
-
-        # تخزين الكوكيز في الذاكرة
-        user_cookies_storage[user_id] = valid_cookies
-        await update.message.reply_text("✅ تم استلام الكوكيز بنجاح! جاري بدء عملية إنشاء الأعمال...")
-        logger.info(f"User  {user_id} provided valid cookies. Initiating creation loop.")
-        # بدء حلقة الإنشاء
-        context.application.create_task(create_business_loop(update, context))
+                await update.message.reply_text(
+                    "❌ كوكيز غير صالحة. يرجى التأكد من أنها تحتوي على c_user و xs على الأقل."
+                )
+                logger.warning(f"User {user_id} provided invalid cookies format.")
+        except Exception as e:
+            await update.message.reply_text(f"❌ حدث خطأ أثناء تحليل الكوكيز: {e}\nيرجى التأكد من أن التنسيق صحيح.")
+            logger.error(f"Error parsing cookies for user {user_id}: {e}")
     else:
-        await update.message.reply_text("❌ لم يتم تقديم أي كوكيز. يرجى إرسالها كرسالة نصية.")
-        logger.warning(f"User  {user_id} sent empty message for cookies.")
+        await update.message.reply_text("❌ لم يتم تقديم أي كوكيز. يرجى إرسالها كسطر واحد.")
+        logger.warning(f"User {user_id} sent empty message for cookies.")
 
 async def create_business_loop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Continuously creates businesses until limit is reached or a persistent error occurs."""
