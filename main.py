@@ -1,12 +1,22 @@
 # facebook_business_bot/main.py
 import logging
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackContext
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackContext, ConversationHandler, CallbackQueryHandler
 from telegram import Update
 
 from config import TELEGRAM_BOT_TOKEN, ADMIN_ID
 from database.db_manager import db_manager
-from telegram_bot.handlers import start_command, handle_cookies_message, help_command, status_command
-from telegram_bot.admin_handlers import admin_menu_command, add_user_command, delete_user_command, list_users_command, send_message_to_all_command, reward_users_command, renew_user_subscription_command
+from telegram_bot.handlers import start_command, handle_cookies_message, help_command, status_command, handle_callback_query # Import handle_callback_query
+from telegram_bot.admin_handlers import (
+    admin_menu_command, list_users_command, # These remain CommandHandlers
+    admin_add_user_start, add_user_get_id, add_user_get_api_key, add_user_get_sub_days, 
+    ADD_USER_STATE_ID, ADD_USER_STATE_API_KEY, ADD_USER_STATE_SUB_DAYS,
+    admin_delete_user_start, delete_user_get_id, DELETE_USER_STATE_ID,
+    admin_send_message_to_all_start, send_message_to_all_get_message, SEND_MESSAGE_STATE,
+    admin_reward_users_start, reward_users_get_days, REWARD_USERS_STATE_DAYS, # Corrected state name
+    admin_renew_user_subscription_start, renew_user_get_id, renew_user_get_days, 
+    RENEW_USER_STATE_ID, RENEW_USER_STATE_DAYS,
+    cancel_admin_conversation # For cancelling conversations
+)
 import traceback
 
 # Configure logging
@@ -63,17 +73,74 @@ def main():
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("status", status_command))
 
-    # --- Admin Command Handlers ---
+    # --- Admin Command Handlers (single-step) ---
     application.add_handler(CommandHandler("admin", admin_menu_command))
-    application.add_handler(CommandHandler("add_user", add_user_command))
-    application.add_handler(CommandHandler("delete_user", delete_user_command))
-    application.add_handler(CommandHandler("list_users", list_users_command))
-    application.add_handler(CommandHandler("send_message_to_all", send_message_to_all_command))
-    application.add_handler(CommandHandler("reward_users", reward_users_command))
-    application.add_handler(CommandHandler("renew_user_subscription", renew_user_subscription_command))
+    application.add_handler(CommandHandler("list_users", list_users_command)) # This remains a simple command
 
+    # --- Admin Conversation Handlers ---
 
-    # --- Message Handler for Cookies (any text message that is not a command) ---
+    # Add User Conversation
+    add_user_conv_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_add_user_start, pattern='^admin_add_user_start$')],
+        states={
+            ADD_USER_STATE_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_user_get_id)],
+            ADD_USER_STATE_API_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_user_get_api_key)],
+            ADD_USER_STATE_SUB_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_user_get_sub_days)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_admin_conversation)],
+        allow_reentry=True # Allow restarting conversation if already in one
+    )
+    application.add_handler(add_user_conv_handler)
+
+    # Delete User Conversation
+    delete_user_conv_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_delete_user_start, pattern='^admin_delete_user_start$')],
+        states={
+            DELETE_USER_STATE_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_user_get_id)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_admin_conversation)],
+        allow_reentry=True
+    )
+    application.add_handler(delete_user_conv_handler)
+
+    # Send Message to All Conversation
+    send_message_conv_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_send_message_to_all_start, pattern='^admin_send_message_to_all_start$')],
+        states={
+            SEND_MESSAGE_STATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, send_message_to_all_get_message)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_admin_conversation)],
+        allow_reentry=True
+    )
+    application.add_handler(send_message_conv_handler)
+
+    # Reward Users Conversation (for all users)
+    reward_users_conv_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_reward_users_start, pattern='^admin_reward_users_start$')],
+        states={
+            REWARD_USERS_STATE_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, reward_users_get_days)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_admin_conversation)],
+        allow_reentry=True
+    )
+    application.add_handler(reward_users_conv_handler)
+
+    # Renew User Subscription Conversation (for specific user)
+    renew_user_conv_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_renew_user_subscription_start, pattern='^admin_renew_user_subscription_start$')],
+        states={
+            RENEW_USER_STATE_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, renew_user_get_id)],
+            RENEW_USER_STATE_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, renew_user_get_days)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_admin_conversation)],
+        allow_reentry=True
+    )
+    application.add_handler(renew_user_conv_handler)
+
+    # --- General Callback Query Handler (for user-facing buttons like start/stop creation) ---
+    application.add_handler(CallbackQueryHandler(handle_callback_query)) 
+
+    # --- Message Handler for Cookies (any text message that is not a command or part of a conversation) ---
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_cookies_message))
 
     # --- Register error handler ---
