@@ -4,7 +4,7 @@ from datetime import date
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 from config import MAX_RETRIES_PER_BUSINESS, INITIAL_RETRY_DELAY # Add this line
-
+from telegram.helpers import escape_markdown
 # Removed telegram.helpers.escape_markdown as we are not using MarkdownV2
 
 from database.db_manager import db_manager
